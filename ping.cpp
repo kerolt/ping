@@ -108,13 +108,11 @@ bool MyPing::RecvEchoReply(sockaddr_in dest_sockaddr, int seq, Reply *reply, DWO
 
 USHORT MyPing::CalCheckSum(USHORT *buffer, int size) {
     unsigned long check_sum = 0;
-    while (size > 1)
-    {
+    while (size > 1) {
         check_sum += *buffer++;
         size -= sizeof(USHORT);
     }
-    if (size)
-    {
+    if (size) {
         check_sum += *(UCHAR *)buffer;
     }
 
