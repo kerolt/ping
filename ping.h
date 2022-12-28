@@ -1,67 +1,67 @@
 #pragma once
 
-// 在默认windows.h会包含winsock.h，当你包含winsock2.h就会冲突，因此在包含windows.h前需要定义一个宏,#define WIN32_LEAN_AND_MEAN ;去除winsock.h
-// 要么将#include <winsock2.h>放在#include<windows.h>前面或者直接去掉#include<windows.h>
-
 #include <winsock2.h>
-#pragma comment(lib, "ws2_32.lib") // 链接到WS2_32.lib
+#pragma comment(lib, "ws2_32.lib") // 如果是cmake工程则可在CMakeLists.txt中配置lib的链接
 
-#define DEF_PACKET_SIZE 32
-#define ECHO_REQUEST 8
-#define ECHO_REPLY 0
+#define DEF_PACKET_SIZE 32 // 模拟32字节的数据
+#define ECHO_REQUEST 8 // 回显请求
+#define ECHO_REPLY 0 // 回显响应
 
-struct IPHeader
-{
-    BYTE m_byVerHLen;          // 4位版本+4位首部长度
-    BYTE m_byTOS;              // 服务类型
-    USHORT m_usTotalLen;       // 总长度
-    USHORT m_usID;             // 标识
-    USHORT m_usFlagFragOffset; // 3位标志+13位片偏移
-    BYTE m_byTTL;              // TTL
-    BYTE m_byProtocol;         // 协议
-    USHORT m_usHChecksum;      // 首部检验和
-    ULONG m_ulSrcIP;           // 源IP地址
-    ULONG m_ulDestIP;          // 目的IP地址
+struct IPHeader {
+    BYTE version_head_len;          // 4位版本+4位首部长度
+    BYTE tos;              // 服务类型
+    USHORT total_len;       // 总长度
+    USHORT id;             // 标识
+    USHORT flag_and_offset; // 3位标志+13位片偏移
+    BYTE ttl;              // TTL
+    BYTE protocol;         // 协议
+    USHORT head_checksum;      // 首部检验和
+    ULONG src_ip;           // 32位源IP地址
+    ULONG dest_ip;          // 32位目的IP地址
 };
 
-struct ICMPHeader
-{
-    BYTE m_byType;       // 类型
-    BYTE m_byCode;       // 代码
-    USHORT m_usChecksum; // 检验和
-    USHORT m_usID;       // 标识符
-    USHORT m_usSeq;      // 序号
-    ULONG m_ulTimeStamp; // 时间戳（非标准ICMP头部）
+struct ICMPHeader {
+    BYTE type;       // 类型
+    BYTE code;       // 代码
+    USHORT checksum; // 检验和
+    USHORT id;       // 标识符
+    USHORT seq;      // 序号
+    ULONG timestamp; // 时间戳（非标准ICMP头部）
 };
 
-struct PingReply
-{
-    USHORT m_usSeq;
-    DWORD m_dwRoundTripTime;
-    DWORD m_dwBytes;
-    DWORD m_dwTTL;
+struct Reply {
+    USHORT seq;
+    DWORD rtt;
+    DWORD bytes;
+    DWORD ttl;
 };
 
-class CPing
-{
+struct EndInfo {
+    USHORT sent_num; // 已发送数据包
+    USHORT recv_num; // 已接收数据包
+    DWORD max_rtt; //最长往返时间
+    DWORD min_rtt; //最短往返时间
+};
+
+class MyPing {
 public:
-    CPing();
-    ~CPing();
-    BOOL Ping(DWORD dwDestIP, PingReply *pPingReply = NULL, DWORD dwTimeout = 2000);
-    BOOL Ping(const char *szDestIP, PingReply *pPingReply = NULL, DWORD dwTimeout = 2000);
+    MyPing();
+    ~MyPing();
+    BOOL Ping(const char *dest_ip, Reply *reply = nullptr, DWORD timeout = 2000); // 实现ping操作
 
 private:
-    BOOL PingCore(DWORD dwDestIP, PingReply *pPingReply, DWORD dwTimeout);
-    USHORT CalCheckSum(USHORT *pBuffer, int nSize);
-    ULONG GetTickCountCalibrate();
+    bool SendEchoRequest(sockaddr_in dest_sockaddr);
+    bool RecvEchoReply(sockaddr_in dest_sockaddr, int seq, Reply *reply, DWORD timeout);
+    static USHORT CalCheckSum(USHORT *buffer, int size); // 校验和
+    static ULONG GetTickCountCalibrate();
 
 private:
-    SOCKET m_sockRaw;
-    WSAEVENT m_event;
-    USHORT m_usCurrentProcID;
-    char *m_szICMPData;
-    BOOL m_bIsInitSucc;
+    SOCKET socket_;
+    WSAEVENT event_;
+    USHORT curr_proc_id_;
+    char *icmp_data_;
+    BOOL is_init_;
+    ULONG send_timestamp_;
 
-private:
-    static USHORT s_usPacketSeq;
+    static USHORT packet_seq_;
 };

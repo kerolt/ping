@@ -1,197 +1,149 @@
-#include "ping.h"
 #include <iostream>
-USHORT CPing::s_usPacketSeq = 0;
+#include "ping.h"
 
-CPing::CPing() : m_szICMPData(NULL), m_bIsInitSucc(FALSE)
-{
+USHORT MyPing::packet_seq_ = 0;
+
+MyPing::MyPing() : icmp_data_(nullptr), is_init_(FALSE), send_timestamp_(0) {
     WSADATA WSAData;
-    // WSAStartup(MAKEWORD(2, 2), &WSAData);
-    if (WSAStartup(MAKEWORD(1, 1), &WSAData) != 0)
-    {
-        /*如果初始化不成功则报错，GetLastError()返回发生的错误信息*/
-        printf("WSAStartup() failed: %d\n", GetLastError());
+    if (WSAStartup(MAKEWORD(1, 1), &WSAData) != 0) {
+        printf("初始化错误！ %d\n", GetLastError());
         return;
     }
-    m_event = WSACreateEvent();
-    m_usCurrentProcID = (USHORT)GetCurrentProcessId();
-    // setsockopt(m_sockRaw);
-    /*if ((m_sockRaw = WSASocket(AF_INET, SOCK_RAW, IPPROTO_ICMP, NULL, 0, 0)) != SOCKET_ERROR)
-    {
-        WSAEventSelect(m_sockRaw, m_event, FD_READ);
-        m_bIsInitSucc = TRUE;
+    event_ = WSACreateEvent();
+    curr_proc_id_ = (USHORT)GetCurrentProcessId();
 
-        m_szICMPData = (char*)malloc(DEF_PACKET_SIZE + sizeof(ICMPHeader));
-
-        if (m_szICMPData == NULL)
-        {
-            m_bIsInitSucc = FALSE;
-        }
-    }*/
-    m_sockRaw = WSASocket(AF_INET, SOCK_RAW, IPPROTO_ICMP, NULL, 0, 0);
-    if (m_sockRaw == INVALID_SOCKET)
-    {
-        std::cerr << "WSASocket() failed:" << WSAGetLastError() << std::endl; // 10013 以一种访问权限不允许的方式做了一个访问套接字的尝试。
+    socket_ = WSASocket(AF_INET, SOCK_RAW, IPPROTO_ICMP, nullptr, 0, 0);
+    if (socket_ == INVALID_SOCKET) {
+        printf("无效的socket！%ld\n", WSAGetLastError());
     }
-    else
-    {
-        WSAEventSelect(m_sockRaw, m_event, FD_READ);
-        m_bIsInitSucc = TRUE;
-
-        m_szICMPData = (char *)malloc(DEF_PACKET_SIZE + sizeof(ICMPHeader));
-
-        if (m_szICMPData == NULL)
-        {
-            m_bIsInitSucc = FALSE;
+    else {
+        WSAEventSelect(socket_, event_, FD_READ);
+        is_init_ = TRUE;
+        icmp_data_ = (char *)malloc(DEF_PACKET_SIZE + sizeof(ICMPHeader));
+        if (icmp_data_ == nullptr) {
+            is_init_ = FALSE;
         }
     }
 }
 
-CPing::~CPing()
-{
+MyPing::~MyPing() {
     WSACleanup();
-
-    if (NULL != m_szICMPData)
-    {
-        free(m_szICMPData);
-        m_szICMPData = NULL;
+    if (icmp_data_ != nullptr) {
+        free(icmp_data_);
+        icmp_data_ = nullptr;
     }
 }
 
-BOOL CPing::Ping(DWORD dwDestIP, PingReply *pPingReply, DWORD dwTimeout)
-{
-    return PingCore(dwDestIP, pPingReply, dwTimeout);
-}
-
-BOOL CPing::Ping(const char *szDestIP, PingReply *pPingReply, DWORD dwTimeout)
-{
-    if (NULL != szDestIP)
-    {
-        return PingCore(inet_addr(szDestIP), pPingReply, dwTimeout);
+BOOL MyPing::Ping(const char *dest_ip, Reply *reply, DWORD timeout) {
+    if (dest_ip == nullptr) {
+        return FALSE;
     }
-    return FALSE;
-}
-
-BOOL CPing::PingCore(DWORD dwDestIP, PingReply *pPingReply, DWORD dwTimeout)
-{
     // 判断初始化是否成功
-    if (!m_bIsInitSucc)
-    {
+    if (!is_init_) {
         return FALSE;
     }
 
-    // 配置SOCKET
-    sockaddr_in sockaddrDest;
-    sockaddrDest.sin_family = AF_INET;
-    sockaddrDest.sin_addr.s_addr = dwDestIP;
-    int nSockaddrDestSize = sizeof(sockaddrDest);
+    sockaddr_in dest_sockaddr{};
+    dest_sockaddr.sin_family = AF_INET;
+    dest_sockaddr.sin_addr.s_addr = inet_addr(dest_ip); // ip地址转换
 
+    bool send = SendEchoRequest(dest_sockaddr);
+    if (!send) {
+        printf("发送出错！\n");
+    }
+    bool recv = RecvEchoReply(dest_sockaddr, packet_seq_, reply, timeout);
+    return recv;
+}
+
+bool MyPing::SendEchoRequest(sockaddr_in dest_sockaddr) {
     // 构建ICMP包
-    int nICMPDataSize = DEF_PACKET_SIZE + sizeof(ICMPHeader);
-    ULONG ulSendTimestamp = GetTickCountCalibrate();
-    USHORT usSeq = ++s_usPacketSeq;
-    memset(m_szICMPData, 0, nICMPDataSize);
-    ICMPHeader *pICMPHeader = (ICMPHeader *)m_szICMPData;
-    pICMPHeader->m_byType = ECHO_REQUEST;
-    pICMPHeader->m_byCode = 0;
-    pICMPHeader->m_usID = m_usCurrentProcID;
-    pICMPHeader->m_usSeq = usSeq;
-    pICMPHeader->m_ulTimeStamp = ulSendTimestamp;
-    pICMPHeader->m_usChecksum = CalCheckSum((USHORT *)m_szICMPData, nICMPDataSize);
+    int icmp_size = DEF_PACKET_SIZE + sizeof(ICMPHeader);
+    send_timestamp_ = GetTickCountCalibrate();
+    USHORT seq = ++packet_seq_;
+    memset(icmp_data_, 0, icmp_size);
+    ICMPHeader *icmp_header = (ICMPHeader *)icmp_data_;
+    icmp_header->type = ECHO_REQUEST;
+    icmp_header->code = 0;
+    icmp_header->id = curr_proc_id_;
+    icmp_header->seq = seq;
+    icmp_header->timestamp = send_timestamp_;
+    icmp_header->checksum = CalCheckSum((USHORT *)icmp_data_, icmp_size);
 
-    // 发送ICMP报文
-    if (sendto(m_sockRaw, m_szICMPData, nICMPDataSize, 0, (struct sockaddr *)&sockaddrDest, nSockaddrDestSize) == SOCKET_ERROR)
-    {
-        return FALSE;
+    // 向目的IP发送ICMP报文
+    int dest_sockaddr_size = sizeof(dest_sockaddr);
+    if (sendto(socket_, icmp_data_, icmp_size, 0, (struct sockaddr *)&dest_sockaddr, dest_sockaddr_size) == SOCKET_ERROR) {
+        return false;
     }
+    return true;
+}
 
-    // 判断是否需要接收相应报文
-    if (pPingReply == NULL)
-    {
-        return TRUE;
-    }
+bool MyPing::RecvEchoReply(sockaddr_in dest_sockaddr, int seq, Reply *reply, DWORD timeout) {
+    char recv_buf[256] = {"\0"};
+    // 接收响应报文
+    while (TRUE) {
+        ULONG recv_timestamp = GetTickCountCalibrate(); // 获取回复报文的到达时间
+        int dest_sockaddr_size = sizeof(dest_sockaddr);
+        int packet_size = recvfrom(socket_, recv_buf, 256, 0, (struct sockaddr *) &dest_sockaddr, &dest_sockaddr_size);
+        if (packet_size != SOCKET_ERROR) {
+            IPHeader *ip_header = (IPHeader *) recv_buf;
+            USHORT ip_header_len = (USHORT) ((ip_header->version_head_len & 0x0f) * 4);
+            ICMPHeader *pICMPHeader = (ICMPHeader *) (recv_buf + ip_header_len);
 
-    char recvbuf[256] = {"\0"};
-    while (TRUE)
-    {
-        // 接收响应报文
-        if (WSAWaitForMultipleEvents(1, &m_event, FALSE, 100, FALSE) != WSA_WAIT_TIMEOUT)
-        {
-            WSANETWORKEVENTS netEvent;
-            WSAEnumNetworkEvents(m_sockRaw, m_event, &netEvent);
-
-            if (netEvent.lNetworkEvents & FD_READ)
-            {
-                ULONG nRecvTimestamp = GetTickCountCalibrate();
-                int nPacketSize = recvfrom(m_sockRaw, recvbuf, 256, 0, (struct sockaddr *)&sockaddrDest, &nSockaddrDestSize);
-                if (nPacketSize != SOCKET_ERROR)
-                {
-                    IPHeader *pIPHeader = (IPHeader *)recvbuf;
-                    USHORT usIPHeaderLen = (USHORT)((pIPHeader->m_byVerHLen & 0x0f) * 4);
-                    ICMPHeader *pICMPHeader = (ICMPHeader *)(recvbuf + usIPHeaderLen);
-
-                    if (pICMPHeader->m_usID == m_usCurrentProcID // 是当前进程发出的报文
-                        && pICMPHeader->m_byType == ECHO_REPLY   // 是ICMP响应报文
-                        && pICMPHeader->m_usSeq == usSeq         // 是本次请求报文的响应报文
-                    )
-                    {
-                        pPingReply->m_usSeq = usSeq;
-                        pPingReply->m_dwRoundTripTime = nRecvTimestamp - pICMPHeader->m_ulTimeStamp;
-                        pPingReply->m_dwBytes = nPacketSize - usIPHeaderLen - sizeof(ICMPHeader);
-                        pPingReply->m_dwTTL = pIPHeader->m_byTTL;
-                        return TRUE;
-                    }
-                }
+            if (pICMPHeader->id == curr_proc_id_    // 是当前进程发出的报文
+                && pICMPHeader->type == ECHO_REPLY  // 是ICMP响应报文
+                && pICMPHeader->seq == packet_seq_  // 是本次请求报文的响应报文
+                    ) {
+                reply->seq = seq;
+                reply->rtt = recv_timestamp - pICMPHeader->timestamp;
+                reply->bytes = packet_size - ip_header_len - sizeof(ICMPHeader);
+                reply->ttl = ip_header->ttl;
+                return true;
             }
         }
-        // 超时
-        if (GetTickCountCalibrate() - ulSendTimestamp >= dwTimeout)
-        {
-            return FALSE;
+        if (GetTickCountCalibrate() - send_timestamp_ >= timeout) {
+            return false;
         }
     }
 }
 
-USHORT CPing::CalCheckSum(USHORT *pBuffer, int nSize)
-{
-    unsigned long ulCheckSum = 0;
-    while (nSize > 1)
+USHORT MyPing::CalCheckSum(USHORT *buffer, int size) {
+    unsigned long check_sum = 0;
+    while (size > 1)
     {
-        ulCheckSum += *pBuffer++;
-        nSize -= sizeof(USHORT);
+        check_sum += *buffer++;
+        size -= sizeof(USHORT);
     }
-    if (nSize)
+    if (size)
     {
-        ulCheckSum += *(UCHAR *)pBuffer;
+        check_sum += *(UCHAR *)buffer;
     }
 
-    ulCheckSum = (ulCheckSum >> 16) + (ulCheckSum & 0xffff);
-    ulCheckSum += (ulCheckSum >> 16);
+    check_sum = (check_sum >> 16) + (check_sum & 0xffff);
+    check_sum += (check_sum >> 16);
 
-    return (USHORT)(~ulCheckSum);
+    return (USHORT)(~check_sum);
 }
 
-ULONG CPing::GetTickCountCalibrate()
-{
-    static ULONG s_ulFirstCallTick = 0;
-    static LONGLONG s_ullFirstCallTickMS = 0;
 
-    SYSTEMTIME systemtime;
+ULONG MyPing::GetTickCountCalibrate() {
+    static ULONG first_call_tick = 0;
+    static LONGLONG first_call_tick_ms = 0;
+
+    SYSTEMTIME sys_time;
     FILETIME filetime;
-    GetLocalTime(&systemtime);
-    SystemTimeToFileTime(&systemtime, &filetime);
-    LARGE_INTEGER liCurrentTime;
-    liCurrentTime.HighPart = filetime.dwHighDateTime;
-    liCurrentTime.LowPart = filetime.dwLowDateTime;
-    LONGLONG llCurrentTimeMS = liCurrentTime.QuadPart / 10000;
+    GetLocalTime(&sys_time);
+    SystemTimeToFileTime(&sys_time, &filetime);
+    LARGE_INTEGER curr_time;
+    curr_time.HighPart = filetime.dwHighDateTime;
+    curr_time.LowPart = filetime.dwLowDateTime;
+    LONGLONG curr_time_ms = curr_time.QuadPart / 10000;
 
-    if (s_ulFirstCallTick == 0)
-    {
-        s_ulFirstCallTick = GetTickCount();
+    if (first_call_tick == 0) {
+        first_call_tick = GetTickCount();
     }
-    if (s_ullFirstCallTickMS == 0)
-    {
-        s_ullFirstCallTickMS = llCurrentTimeMS;
+    if (first_call_tick_ms == 0) {
+        first_call_tick_ms = curr_time_ms;
     }
 
-    return s_ulFirstCallTick + (ULONG)(llCurrentTimeMS - s_ullFirstCallTickMS);
+    return first_call_tick + (ULONG)(curr_time_ms - first_call_tick_ms);
 }
